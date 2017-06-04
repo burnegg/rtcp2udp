@@ -10,10 +10,6 @@ import logging
 from time import sleep
 import struct
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(levelname)s] %(message)s',
-)
 
 buffsize = 4096
 pool = range(30)
@@ -122,9 +118,15 @@ class PortMap(object):
 
         tcp_data = ' '
         while tcp_data:
-            tcp_data = tcplist[tcp_id].recv(buffsize - 5)
+            try:
+                tcp_data = tcplist[tcp_id].recv(buffsize - 5)
+            except Exception,e:
+                logging.error(e)
+                tcplist.pop(tcp_id)
+                break
+
             fre = struct.pack("i?",tcp_id,tcp_data)
-            logging.debug( 'tcp send',tcp_id, bool(tcp_data), len(tcp_data) )
+            logging.debug( '[%s] send len(%s) in tcp_recv' % (tcp_id, len(tcp_data)) )
             self.udp_clnt.sendto(fre + tcp_data,(self.udp_host,self.udp_port))
             if not tcp_data:
                 try:
@@ -132,7 +134,7 @@ class PortMap(object):
                 except:
                     pass
                 finally:
-                    logging.debug( 'tcp send over '+str(tcp_id) )
+                    logging.debug( '[%s] send end flag in tcp_recv' % tcp_id )
                     tcplist.pop(tcp_id)
                     pool.append(tcp_id)
 
@@ -143,7 +145,7 @@ class PortMap(object):
             udp_data,udp_addr = self.udp_clnt.recvfrom(buffsize)
             tcp_id, connect = struct.unpack("i?",udp_data[:5])
             udp_data = udp_data[5:]
-            logging.debug( 'udp recv', tcp_id, connect, len(udp_data) )
+            logging.debug( '[%s] recv len(%s) in udp_recv' % (tcp_id, len(udp_data)) )
             if connect:
                 if tcp_id not in tcplist:
                     logging.error( 'tcp_id error !' )
@@ -183,7 +185,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="tcp2udp v 1.0 ( Bridge TCP to UDP Forwarding Tools )")
     parser.add_argument("-t","--tcp",metavar="",required=True,help="tcp_server listen ipaddress : tcp_port")
     parser.add_argument("-u","--udp",metavar="",required=True,help="udp_server listen ipaddress : udp_port")
+    parser.add_argument("-d","--debug",help='debug mode',action="store_true")
     args = parser.parse_args()
+
+
+    logging.basicConfig(
+        level=logging.INFO if not args.debug else logging.DEBUG,
+        format='[%(levelname)s] %(message)s',
+    )
 
     if ":" not in args.tcp or ":" not in args.udp:
         logging.info('args is error')

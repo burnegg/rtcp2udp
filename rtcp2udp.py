@@ -10,10 +10,6 @@ import logging
 from time import sleep
 import struct
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(levelname)s] %(message)s',
-)
 
 buffsize = 4096
 tcplist = {}
@@ -80,11 +76,16 @@ class PortMap(object):
             logging.info('connection destory success...')
 
     def tcp_recvd(self, tcp_id):
-        logging.debug( 'new tcp_recvd thread with id %s' % tcp_id )
+        logging.debug( 'start tcp_recvd thread with tcp_id %s' % tcp_id )
         while tcp_id in tcplist:
-            tcp_data = tcplist[tcp_id].recv(buffsize - 5)
+            try:
+                tcp_data = tcplist[tcp_id].recv(buffsize - 5)
+            except Exception,e:
+                logging.error(e)
+                tcplist.pop(tcp_id)
+                break
             fre = struct.pack("i?",tcp_id,tcp_data)
-            logging.debug( 'tcp send',tcp_id, bool(tcp_data), len(tcp_data) )
+            logging.debug( '[%s] send len(%s) in tcp_recv' % (tcp_id, len(tcp_data)) )
             self.udp_clnt.sendto(fre + tcp_data,(self.udp_host,self.udp_port))
             if not tcp_data:
                 try:
@@ -92,7 +93,7 @@ class PortMap(object):
                 except:
                     pass
                 finally:
-                    logging.debug( 'tcp send over '+str(tcp_id) )
+                    logging.debug( '[%s] send end flag in tcp_recv' % tcp_id )
                     tcplist.pop(tcp_id)
 
     def udp_recvd(self):
@@ -100,7 +101,7 @@ class PortMap(object):
             udp_data,udp_addr = self.udp_clnt.recvfrom(buffsize)
             tcp_id, connect = struct.unpack("i?",udp_data[:5])
             udp_data = udp_data[5:]
-            logging.debug( 'udp recv', tcp_id, connect, len(udp_data) )
+            logging.debug( '[%s] recv len(%s) in udp_recv' % (tcp_id, len(udp_data)) )
             if connect:
                 if tcp_id not in tcplist:
                     tcplist[tcp_id] = self.tcp_client()
@@ -108,14 +109,19 @@ class PortMap(object):
                 tcplist[tcp_id].sendall(udp_data)
             else:
                 if tcp_id in tcplist:
-                    tcplist[tcp_id].shutdown(socket.SHUT_RD)
                     tcplist[tcp_id].shutdown(socket.SHUT_WR)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="rtcp2udp v 1.0 ( Reverse TCP Port to UDP Forwarding Tools )")
     parser.add_argument("-t","--tcp",metavar="",required=True,help="forwarding tcp ipaddress : tcp_port")
     parser.add_argument("-u","--udp",metavar="",required=True,help="connect udp server ipaddress : udp_port")
+    parser.add_argument("-d","--debug",help='debug mode',action="store_true")
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO if not args.debug else logging.DEBUG,
+        format='[%(levelname)s] %(message)s',
+    )
 
     if ":" not in args.tcp or ":" not in args.udp:
         logging.info('args is error')
