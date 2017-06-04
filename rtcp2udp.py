@@ -7,6 +7,8 @@ import socket
 import threading
 import argparse
 import logging
+from time import sleep
+import struct
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,49 +16,54 @@ logging.basicConfig(
 )
 
 buffsize = 4096
+tcplist = {}
 
 class PortMap(object):
     """docstring for PortMap"""
-    def __init__(self,):
+    def __init__(self, tcp_addr, tcp_port):
         super(PortMap, self).__init__()
-        self.bridge_flag = True
+        self.tcp_addr = tcp_addr
+        self.tcp_port = int(tcp_port)
+        self.udp_clnt = None
+        self.udp_host = None
+        self.udp_port = None
 
-    def tcp_client(self, rhost, rport):
+    def tcp_client(self):
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return client, rhost, rport
+        client.connect((self.tcp_addr, self.tcp_port))
+        return client
 
     def udp_client(self, rhost, rport):
         client = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
         return client, rhost, rport
 
-    def udp_forward(self,tcp_sock,udp_sock):
+    def start_tcpthread(self, tcp_id):
+        logging.info( '[+] connectting %s:%s' % (self.tcp_addr, self.tcp_port) )
+        tcp_recvd_thread = threading.Thread(target=self.tcp_recvd, args=(tcp_id,))
+        tcp_recvd_thread.daemon = True
+        tcp_recvd_thread.start()
+
+    def udp_forward(self, udp_sock):
         bridge_signal = False
-        tcp_clnt,tcp_host,tcp_port = tcp_sock
-        udp_clnt,udp_host,udp_port = udp_sock
-        logging.info('Client Bridge Connection Success...')
+        self.udp_clnt, self.udp_host, self.udp_port = udp_sock
 
         try:
-            udp_clnt.sendto('client',(udp_host,udp_port))
+            self.udp_clnt.sendto('client',(self.udp_host, self.udp_port))
             while not bridge_signal:
-                udp_data,udp_addr = udp_clnt.recvfrom(buffsize)
+                udp_data,udp_addr = self.udp_clnt.recvfrom(buffsize)
                 if udp_data == 'client_ack_success':
                     bridge_signal = True
             logging.info('Client Bridge Recieved Signal...')
 
-            udp_recvd_thread = threading.Thread(target=self.udp_recvd, args=(tcp_clnt, udp_clnt, udp_host, udp_port))
+            udp_recvd_thread = threading.Thread(target=self.udp_recvd, args=())
             udp_recvd_thread.daemon = True
             udp_recvd_thread.start()
 
-            # init TCP connection
-            tcp_clnt.connect((tcp_host,tcp_port))
-
-            tcp_recvd_thread = threading.Thread(target=self.tcp_recvd, args=(tcp_clnt, udp_clnt, udp_host, udp_port))
-            tcp_recvd_thread.daemon = True
-            tcp_recvd_thread.start()
-
-            while self.bridge_flag:
-                pass
+            while True:
+                sleep(5)
+                logging.info( 'thread now active: '+str(threading.activeCount()) )
+                logging.info( 'len(tcplist) = %d' % len(tcplist) )
 
         except socket.error as msg:
             logging.error(msg)
@@ -64,23 +71,40 @@ class PortMap(object):
             raise e
             logging.info(e)
         finally:
-            tcp_clnt.close()
-            udp_clnt.close()
+            self.udp_clnt.close()
             logging.info('connection destory success...')
 
-    def tcp_recvd(self, tcp_clnt, udp_clnt, udp_host, udp_port):
-        while True:
-            tcp_data = tcp_clnt.recv(buffsize)
+    def tcp_recvd(self, tcp_id):
+        logging.debug( 'new tcp_recvd thread with id %s' % tcp_id )
+        while tcp_id in tcplist:
+            tcp_data = tcplist[tcp_id].recv(buffsize - 5)
+            fre = struct.pack("i?",tcp_id,tcp_data)
+            logging.debug( 'tcp send',tcp_id, bool(tcp_data), len(tcp_data) )
+            self.udp_clnt.sendto(fre + tcp_data,(self.udp_host,self.udp_port))
             if not tcp_data:
-                self.bridge_flag = False
-            udp_clnt.sendto(tcp_data,(udp_host,udp_port))
+                try:
+                    tcplist[tcp_id].shutdown(socket.SHUT_RD)
+                except:
+                    pass
+                finally:
+                    logging.debug( 'tcp send over '+str(tcp_id) )
+                    tcplist.pop(tcp_id)
 
-    def udp_recvd(self, tcp_clnt, udp_clnt, udp_host, udp_port):
+    def udp_recvd(self):
         while True:
-            udp_data,udp_addr = udp_clnt.recvfrom(buffsize)
-            if not udp_data:
-                self.bridge_flag = False
-            tcp_clnt.send(udp_data)
+            udp_data,udp_addr = self.udp_clnt.recvfrom(buffsize)
+            tcp_id, connect = struct.unpack("i?",udp_data[:5])
+            udp_data = udp_data[5:]
+            logging.debug( 'udp recv', tcp_id, connect, len(udp_data) )
+            if connect:
+                if tcp_id not in tcplist:
+                    tcplist[tcp_id] = self.tcp_client()
+                    self.start_tcpthread(tcp_id)
+                tcplist[tcp_id].sendall(udp_data)
+            else:
+                if tcp_id in tcplist:
+                    tcplist[tcp_id].shutdown(socket.SHUT_RD)
+                    tcplist[tcp_id].shutdown(socket.SHUT_WR)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="rtcp2udp v 1.0 ( Reverse TCP Port to UDP Forwarding Tools )")
@@ -96,12 +120,11 @@ if __name__ == '__main__':
     tcp_addr,tcp_port = args.tcp.split(':')
     udp_addr,udp_port = args.udp.split(':')
 
-    portmap = PortMap()
-    tcp_conn = portmap.tcp_client(tcp_addr,int(tcp_port))
+    portmap = PortMap(tcp_addr, tcp_port)
     udp_conn = portmap.udp_client(udp_addr,int(udp_port))
 
     try:
-        portmap.udp_forward(tcp_conn,udp_conn)
+        portmap.udp_forward(udp_conn)
     except KeyboardInterrupt:
         print "Ctrl C - Stopping Client"
         sys.exit(1)
