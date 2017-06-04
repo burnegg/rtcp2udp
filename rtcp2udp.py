@@ -49,12 +49,14 @@ class PortMap(object):
         self.udp_clnt, self.udp_host, self.udp_port = udp_sock
 
         try:
+            self.udp_clnt.settimeout(5)
             self.udp_clnt.sendto('client',(self.udp_host, self.udp_port))
             while not bridge_signal:
                 udp_data,udp_addr = self.udp_clnt.recvfrom(buffsize)
                 if udp_data == 'client_ack_success':
                     bridge_signal = True
             logging.info('Client Bridge Recieved Signal...')
+            self.udp_clnt.settimeout(None)
 
             udp_recvd_thread = threading.Thread(target=self.udp_recvd, args=())
             udp_recvd_thread.daemon = True
@@ -65,6 +67,9 @@ class PortMap(object):
                 logging.info( 'thread now active: '+str(threading.activeCount()) )
                 logging.info( 'len(tcplist) = %d' % len(tcplist) )
 
+        except socket.timeout:
+            logging.error( '[-]timeout, retry')
+            return self.udp_forward(udp_sock)
         except socket.error as msg:
             logging.error(msg)
         except Exception, e:

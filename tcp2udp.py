@@ -114,6 +114,7 @@ class PortMap(object):
         except Exception, e:
             logging.info(e)
         finally:
+            self.tcp_sock.close()
             self.udp_clnt.close()
             logging.info('connection destory success...')
 
@@ -155,7 +156,8 @@ class PortMap(object):
 
     def tcp_server(self, lhost, lport):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        #server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.tcp_sock = server
         try:
             server.bind((lhost,lport))
             server.listen(5)
@@ -170,10 +172,12 @@ class PortMap(object):
 
         except socket.error as msg:
             logging.error(msg)
+            sleep(3)
         except Exception, e:
             logging.error(e)
+            sleep(3)
         finally:
-            self.tcp_server(lhost, lport)
+            return tcp_server(lhost, lport)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="tcp2udp v 1.0 ( Bridge TCP to UDP Forwarding Tools )")
